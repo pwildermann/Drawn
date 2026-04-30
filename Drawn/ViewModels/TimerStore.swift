@@ -1,23 +1,27 @@
-import Combine
 import Foundation
+import Observation
+import OSLog
 import UIKit
 import UserNotifications
 
 @MainActor
-final class TimerStore: ObservableObject {
-    @Published var timers: [DrawnTimer] = []
+@Observable
+final class TimerStore {
+    var timers: [DrawnTimer] = [] {
+        didSet { scheduleDebouncedSave() }
+    }
 
     /// Shown once after the **first** time any timer transitions to running (primer before the OS notification prompt).
-    @Published private(set) var presentNotificationPermissionPrimer = false
+    private(set) var presentNotificationPermissionPrimer = false
 
     /// Wall-clock deadlines (`now + remaining` at snapshot) — used to **`resync`** `remainingSeconds` after suspend and for periodic background heals (**no** per‑second **`activity.update`**).
-    private var runningDeadlineByTimerID: [UUID: Date] = [:]
+    @ObservationIgnored private var runningDeadlineByTimerID: [UUID: Date] = [:]
 
     /// Coarse background wake (**~60 s**, main run loop) **`resync`** + **`activity.update`** so Live Activity **`ContentState.endDate`** matches wall time (`Text(_, style: .timer)` animates toward that absolute date).
-    private var backgroundLiveActivityHealTimer: Timer?
+    @ObservationIgnored private var backgroundLiveActivityHealTimer: Timer?
 
     /// One-shot at the soonest running wall-clock deadline so completion fires when **`tick`** doesn’t (**`ringing`** + alarm + LA update vs. stale **`endDate`**).
-    private var backgroundWallClockExpiryTimer: Timer?
+    @ObservationIgnored private var backgroundWallClockExpiryTimer: Timer?
 
     /// Snapshot of the timer that just hit zero; shown in the Live Activity until dismissed.
     private var ringingSession: DrawnTimer? {
@@ -25,14 +29,24 @@ final class TimerStore: ObservableObject {
     }
 
     /// Drives foreground “expanded island” parity UI — ActivityKit often does not promote the Dynamic Island alert while your own app stays active.
-    @Published private(set) var ringingAlarmTimerIDForUI: UUID?
+    private(set) var ringingAlarmTimerIDForUI: UUID?
 
-    private var tickTimer: DispatchSourceTimer?
-    private var ringingIntentDrainTimer: DispatchSourceTimer?
-    private var saveCancellable: AnyCancellable?
+    @ObservationIgnored private var tickTimer: DispatchSourceTimer?
+    @ObservationIgnored private var ringingIntentDrainTimer: DispatchSourceTimer?
+    @ObservationIgnored private var saveWorkItem: DispatchWorkItem?
 
     /// Mirrors which timer **`LiveActivityService`** shows (ringing id, else primary running/paused). Used to avoid **`activity.update`** on every **`tick`** while still reacting when **`primaryTimerForLiveActivity()`** changes.
-    private var lastSyncedLiveActivityTargetID: UUID?
+    @ObservationIgnored private var lastSyncedLiveActivityTargetID: UUID?
+
+    private func scheduleDebouncedSave() {
+        saveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            TimerPersistenceService.shared.save(self.timers)
+        }
+        saveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
 
     init() {
         timers = TimerPersistenceService.shared.load()
@@ -45,17 +59,18 @@ final class TimerStore: ObservableObject {
         tick.resume()
         tickTimer = tick
 
-        saveCancellable = $timers
-            .debounce(for: .milliseconds(500), scheduler: RunLoop.main)
-            .sink { TimerPersistenceService.shared.save($0) }
-
         // After all stored state is initialized: strong `[self]` so Live Activity intents always reach `resetTimer` (`[weak self]` could be nil while the alarm runs).
-        DrawnIntentsRuntime.onToggleTimer = { [self] id in self.toggleTimer(id) }
-        DrawnIntentsRuntime.onStopTimer = { [self] id in self.resetTimer(id) }
+        TimerIntentCallbacks.onToggleTimer = { [self] id in self.toggleTimer(id) }
+        TimerIntentCallbacks.onStopTimer = { [self] id in self.resetTimer(id) }
 
-        DrawnDarwinAlarmDismissBridge.installMainProcessListener { [weak self] in
+        DrawnDarwinAlarmDismissBridge.installMainProcessListener { [weak self] action in
             Task { @MainActor [weak self] in
-                self?.handleDarwinDismissFromLiveActivityExtension()
+                switch action {
+                case .stop:
+                    self?.handleDarwinStopFromLiveActivityExtension()
+                case .toggle:
+                    self?.handleDarwinToggleFromLiveActivityExtension()
+                }
             }
         }
 
@@ -255,14 +270,27 @@ final class TimerStore: ObservableObject {
         ringingIntentDrainTimer = nil
     }
 
-    /// Live Activity intents often run only in the widget extension (`onStopTimer` / `onToggleTimer` nil there). Darwin notify + polling see `PendingIntentBridge`.
-    private func handleDarwinDismissFromLiveActivityExtension() {
+    /// Live Activity intents often run only in the widget extension (`TimerIntentCallbacks` nil there). Darwin notify + polling see `PendingIntentBridge`.
+    private func handleDarwinStopFromLiveActivityExtension() {
         drainPendingExtensionIntents()
         if let id = ringingSession?.id {
             resetTimer(id)
             return
         }
         TimerAlarmService.shared.stop(for: nil)
+    }
+
+    /// App Group may be missing, so no UUID crosses process boundary. Fall back to toggling whichever
+    /// timer the Live Activity currently represents (ringing has stop semantics; otherwise primary timer).
+    private func handleDarwinToggleFromLiveActivityExtension() {
+        drainPendingExtensionIntents()
+        if let id = ringingSession?.id {
+            resetTimer(id)
+            return
+        }
+        if let id = primaryTimerForLiveActivity()?.id {
+            toggleTimer(id)
+        }
     }
 
     /// Call whenever `ringingSession` may have changed outside `tick()` (already covered at end of `tick`).
@@ -325,10 +353,23 @@ final class TimerStore: ObservableObject {
     }
 
     func toggleTimer(_ timerID: UUID) {
-        guard let index = timers.firstIndex(where: { $0.id == timerID }) else { return }
+        let targetID: UUID
+        if timers.contains(where: { $0.id == timerID }) {
+            targetID = timerID
+            DrawnLog.liveActivity.debug("toggleTimer direct id=\(timerID.uuidString, privacy: .public)")
+        } else if let fallbackID = primaryTimerForLiveActivity()?.id {
+            // Live Activity can briefly carry a stale timer id across app relaunches.
+            // Fall back to the currently represented primary timer instead of no-op.
+            targetID = fallbackID
+            DrawnLog.liveActivity.debug("toggleTimer fallback requested=\(timerID.uuidString, privacy: .public) using=\(fallbackID.uuidString, privacy: .public)")
+        } else {
+            DrawnLog.liveActivity.debug("toggleTimer no-op requested=\(timerID.uuidString, privacy: .public) reason=noTarget")
+            return
+        }
+        guard let index = timers.firstIndex(where: { $0.id == targetID }) else { return }
         // Dismiss ringing via Stop / reset only — toggle must not flip `isRunning` while the alarm session
         // is active (looks like “timer restarted”). Ringing-intent polling also drains stale pending toggles.
-        if ringingSession?.id == timerID {
+        if ringingSession?.id == targetID {
             return
         }
         let wasRunning = timers[index].isRunning
@@ -372,12 +413,15 @@ final class TimerStore: ObservableObject {
     }
 
     func reconcileLiveActivity() {
-        if let r = ringingSession {
-            LiveActivityService.shared.reconcile(ringing: r, primary: nil)
-        } else if let p = primaryTimerForLiveActivity() {
-            LiveActivityService.shared.reconcile(ringing: nil, primary: p)
-        } else {
-            LiveActivityService.shared.reconcile(ringing: nil, primary: nil)
+        LiveActivityService.shared.reconcile { [weak self] in
+            guard let self else { return (nil, nil) }
+            if let r = self.ringingSession {
+                return (r, nil)
+            }
+            if let p = self.primaryTimerForLiveActivity() {
+                return (nil, p)
+            }
+            return (nil, nil)
         }
     }
 

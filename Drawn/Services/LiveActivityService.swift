@@ -1,4 +1,5 @@
 import ActivityKit
+import DrawnActivityModels
 import Foundation
 import PencilKit
 import UIKit
@@ -27,20 +28,18 @@ final class LiveActivityService {
 
     // MARK: - Reconcile
 
-    /// - `ringing`: completion snapshot (doodle, name, …) — takes priority over `primary`.
-    /// - `primary`: running or paused timer to show when not in the ringing state.
-    /// Serializes reconcile work so overlapping `Task`s can't race ringing vs primary updates.
+    /// Serializes reconcile work. **`fetch` runs only after** awaiting the previous task so pushed `DrawnTimer` state matches **`TimerStore`’s latest model** (avoids out‑of‑order `ContentState` after **`tick`**).
+    /// Ringing takes priority over primary.
     private var reconcileChainTask: Task<Void, Never>?
 
-    func reconcile(ringing: DrawnTimer?, primary: DrawnTimer?) {
-        let ringingSnap = ringing
-        let primarySnap = primary
+    func reconcile(fetch: @escaping @MainActor () -> (ringing: DrawnTimer?, primary: DrawnTimer?)) {
         let previous = reconcileChainTask
         reconcileChainTask = Task { @MainActor [weak self] in
             if let previous {
                 await previous.value
             }
             guard let self else { return }
+            let (ringingSnap, primarySnap) = fetch()
             if ringingSnap == nil {
                 self.ringingIslandAlertEmittedForTimerID = nil
             }
@@ -48,7 +47,11 @@ final class LiveActivityService {
                 await self.endActivitiesAsync(where: { $0 != r.id })
                 await self.updateOrRequestRinging(r)
             } else if let p = primarySnap {
-                await self.endActivitiesAsync(where: { $0 != p.id })
+                let hasActivity = self.activity(for: p.id) != nil
+                let appActive = UIApplication.shared.applicationState == .active
+                if hasActivity || appActive {
+                    await self.endActivitiesAsync(where: { $0 != p.id })
+                }
                 await self.updateOrRequestPrimary(p)
             } else {
                 await self.endAllActivitiesAsync()
@@ -123,6 +126,7 @@ final class LiveActivityService {
         if let activity = activity(for: timer.id) {
             await activity.update(primaryContent)
         } else {
+            guard UIApplication.shared.applicationState == .active else { return }
             let attributes = TimerActivityAttributes(timerID: timer.id.uuidString, doodleImageData: imageData)
             do {
                 if #available(iOS 17.0, *) {

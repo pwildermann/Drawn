@@ -1,6 +1,6 @@
 import Foundation
 
-/// Queues **stop** or **toggle** UUIDs when the intent runs before `TimerStore` wires `DrawnIntentsRuntime`,
+/// Queues **stop** or **toggle** UUIDs when the intent runs before `TimerStore` wires `TimerIntentCallbacks`,
 /// or when the intent executes in the widget extension (different `UserDefaults.standard` sandbox than the app).
 ///
 /// **Setup:** Add the same App Group to **Drawn** and **DrawnWidgetExtension**, then set on **both** Info.plists:

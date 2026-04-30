@@ -27,12 +27,12 @@ public struct StopDrawnTimerIntent: AppIntent, LiveActivityIntent {
         }
         await MainActor.run {
             // Don’t enqueue when already handling in-process — foreground drain would replay the reset.
-            if let stop = DrawnIntentsRuntime.onStopTimer {
+            if let stop = TimerIntentCallbacks.onStopTimer {
                 stop(id)
             } else {
                 PendingIntentBridge.recordPendingStop(id)
                 // Extension process: `UserDefaults.standard` is not the app’s sandbox; App Group + Darwin bridge deliver stop.
-                DrawnDarwinAlarmDismissBridge.postDismissRequestFromExtensionIntent()
+                DrawnDarwinAlarmDismissBridge.postStopRequestFromExtensionIntent()
             }
         }
         return .result()

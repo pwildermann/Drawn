@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 struct HomeView: View {
-    @EnvironmentObject private var timerStore: TimerStore
+    @Environment(TimerStore.self) private var timerStore
     @State private var showingCreateSheet = false
     @State private var sheetDragOffset: CGFloat = 0
     @State private var selectedTimer: DrawnTimer? = nil
@@ -125,7 +125,7 @@ struct HomeView: View {
 
                     if showingCreateSheet {
                         CreateTimerView(isPresented: $showingCreateSheet)
-                            .environmentObject(timerStore)
+                            .environment(timerStore)
                             // Intrinsic height: fixed `height: …` left dead space. `TimePickerWheelView` uses
                             // a fixed 144pt frame + UIKit `intrinsicContentSize` so `fixedSize` is safe.
                             .frame(width: proxy.size.width - 16, alignment: .top)
@@ -199,7 +199,7 @@ struct HomeView: View {
                             get: { editingTimer != nil },
                             set: { if !$0 { dismissEditSheet() } }
                         ), timer: timer)
-                        .environmentObject(timerStore)
+                        .environment(timerStore)
                         .frame(width: proxy.size.width - 16, alignment: .top)
                         .fixedSize(horizontal: false, vertical: true)
                         .background(.white)
@@ -858,5 +858,5 @@ private final class ScrollContentTouchDelayFixMarker: UIView {
 
 #Preview {
     HomeView()
-        .environmentObject(TimerStore())
+        .environment(TimerStore())
 }

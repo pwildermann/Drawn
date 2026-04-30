@@ -1,5 +1,6 @@
 import ActivityKit
 import AppIntents
+import DrawnActivityModels
 import SwiftUI
 import UIKit
 import WidgetKit
@@ -185,28 +186,19 @@ private extension View {
     }
 }
 
-// `Link` + `onOpenURL` can miss while the app is already foreground; `StopDrawnTimerIntent` + `PendingIntentBridge` + poll still run.
+// Deep links are the stable path for Live Activity controls in this project.
 @ViewBuilder
 private func stopDismissControl<Content: View>(timerID: String, @ViewBuilder label: () -> Content) -> some View {
-    if #available(iOS 17.0, *) {
-        Button(intent: StopDrawnTimerIntent(timerID: timerID)) {
-            label()
-        }
-    } else {
-        Link(destination: drawnTimerDeepLink(host: "stop", timerID: timerID)) {
-            label()
-        }
+    Link(destination: drawnTimerDeepLink(host: "stop", timerID: timerID)) {
+        label()
     }
 }
 
 private func playPauseToggleOrStaticExpanded(timerID: String, state: TimerActivityAttributes.ContentState) -> some View {
     let pill = ExpandedTimerPill(state: state)
-    /// Pin **175×48** — intent **`Button`** label otherwise stretches and the capsule contents stay leading‑aligned visually.
+    /// Pin **175×48** — keeps the capsule layout stable while still being tappable.
     return Group {
-        if canShowPlayPauseToggle(state), #available(iOS 17.0, *) {
-            Button(intent: ToggleDrawnTimerIntent(timerID: timerID)) { pill }
-                .buttonStyle(LiveActivityPressScaleStyle())
-        } else if canShowPlayPauseToggle(state) {
+        if canShowPlayPauseToggle(state) {
             Link(destination: drawnTimerDeepLink(host: "toggle", timerID: timerID)) { pill }
                 .buttonStyle(LiveActivityPressScaleStyle())
         } else {
@@ -219,11 +211,7 @@ private func playPauseToggleOrStaticExpanded(timerID: String, state: TimerActivi
 @ViewBuilder
 private func playPauseToggleOrStaticLockScreen(timerID: String, state: TimerActivityAttributes.ContentState) -> some View {
     let pill = LockScreenTimerPill(state: state)
-    if canShowPlayPauseToggle(state), #available(iOS 17.0, *) {
-        Button(intent: ToggleDrawnTimerIntent(timerID: timerID)) { pill }
-            .buttonStyle(LiveActivityPressScaleStyle())
-            .frame(maxWidth: .infinity)
-    } else if canShowPlayPauseToggle(state) {
+    if canShowPlayPauseToggle(state) {
         Link(destination: drawnTimerDeepLink(host: "toggle", timerID: timerID)) { pill }
             .buttonStyle(LiveActivityPressScaleStyle())
             .frame(maxWidth: .infinity)

@@ -6,39 +6,66 @@ import Foundation
 ///
 /// Keeps **`PendingIntentBridge` + App Group** as extra delivery when configured; Darwin notify works when App Group isn’t set.
 enum DrawnDarwinAlarmDismissBridge {
-    private static let notificationName = "com.timer.drawn.alarmDismissRequest" as CFString
+    enum Action {
+        case stop
+        case toggle
+    }
 
-    private static let observerCallback: CFNotificationCallback = { _, _, _, _, _ in
-        DispatchQueue.main.async {
-            mainProcessHandler?()
-        }
+    private static let stopNotificationName = "com.timer.drawn.alarmStopRequest" as CFString
+    private static let toggleNotificationName = "com.timer.drawn.alarmToggleRequest" as CFString
+
+    private static let stopObserverCallback: CFNotificationCallback = { _, _, _, _, _ in
+        DispatchQueue.main.async { mainProcessHandler?(.stop) }
+    }
+
+    private static let toggleObserverCallback: CFNotificationCallback = { _, _, _, _, _ in
+        DispatchQueue.main.async { mainProcessHandler?(.toggle) }
     }
 
     /// Main-app callback (must run UI / `TimerAlarmService`); invoked on **main**.
-    nonisolated(unsafe) private static var mainProcessHandler: (() -> Void)?
+    nonisolated(unsafe) private static var mainProcessHandler: ((Action) -> Void)?
 
     private static var didInstallObserver = false
 
     /// Call once from the main app (`TimerStore.init`).
-    static func installMainProcessListener(handler: @escaping () -> Void) {
+    static func installMainProcessListener(handler: @escaping (Action) -> Void) {
         guard !didInstallObserver else { return }
         didInstallObserver = true
         mainProcessHandler = handler
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDarwinNotifyCenter(),
             nil,
-            observerCallback,
-            notificationName,
+            stopObserverCallback,
+            stopNotificationName,
+            nil,
+            .deliverImmediately
+        )
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            nil,
+            toggleObserverCallback,
+            toggleNotificationName,
             nil,
             .deliverImmediately
         )
     }
 
-    /// Call from `StopDrawnTimerIntent` when `DrawnIntentsRuntime.onStopTimer == nil` (runs in Live Activity widget extension).
-    static func postDismissRequestFromExtensionIntent() {
+    /// Call from `StopDrawnTimerIntent` when `TimerIntentCallbacks.onStopTimer == nil` (runs in Live Activity widget extension).
+    static func postStopRequestFromExtensionIntent() {
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
-            CFNotificationName(rawValue: notificationName),
+            CFNotificationName(rawValue: stopNotificationName),
+            nil,
+            nil,
+            true
+        )
+    }
+
+    /// Call from `ToggleDrawnTimerIntent` when `TimerIntentCallbacks.onToggleTimer == nil`.
+    static func postToggleRequestFromExtensionIntent() {
+        CFNotificationCenterPostNotification(
+            CFNotificationCenterGetDarwinNotifyCenter(),
+            CFNotificationName(rawValue: toggleNotificationName),
             nil,
             nil,
             true

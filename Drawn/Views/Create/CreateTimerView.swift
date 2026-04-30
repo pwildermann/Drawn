@@ -5,7 +5,7 @@ struct CreateTimerView: View {
     /// Controls whether this sheet is visible. Set to false to dismiss.
     @Binding var isPresented: Bool
 
-    @EnvironmentObject private var timerStore: TimerStore
+    @Environment(TimerStore.self) private var timerStore
 
     @State private var duration = TimerDuration(hours: 0, minutes: 5, seconds: 0)
     @State private var drawing = PKDrawing()
@@ -148,5 +148,5 @@ private extension Color {
 
 #Preview {
     CreateTimerView(isPresented: .constant(true))
-        .environmentObject(TimerStore())
+        .environment(TimerStore())
 }

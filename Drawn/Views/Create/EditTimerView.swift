@@ -5,7 +5,7 @@ struct EditTimerView: View {
     @Binding var isPresented: Bool
     let timer: DrawnTimer
 
-    @EnvironmentObject private var timerStore: TimerStore
+    @Environment(TimerStore.self) private var timerStore
 
     @State private var duration: TimerDuration
     @State private var drawing: PKDrawing
@@ -164,5 +164,5 @@ private extension Color {
         isPresented: .constant(true),
         timer: DrawnTimer(name: "Preview", duration: TimerDuration(hours: 0, minutes: 5, seconds: 0))
     )
-    .environmentObject(TimerStore())
+    .environment(TimerStore())
 }
