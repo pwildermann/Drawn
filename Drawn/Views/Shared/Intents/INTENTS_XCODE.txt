@@ -1,0 +1,65 @@
+App intents (Dynamic Island) — shared sources, no Swift package
+
+-- Error: "the package manifest at '.../DrawnIntents/Package.swift' cannot be accessed"
+  or "... doesn't exist in file system"
+  Xcode still has a LOCAL Swift package pointing at the old DrawnIntents folder, which
+  is intentionally not in the repo. Fix:
+  1) Select the Timer PROJECT (blue icon) in the navigator → "Package Dependencies"
+     (or the project editor "Package Dependencies" list).
+  2) Select the DrawnIntents (local) entry → press minus (–) to remove it.
+  3) In each target (app + extension): Build Phases → "Link Binary With Libraries" →
+     remove DrawnIntents if listed.
+  4) If the Project navigator still shows a DrawnIntents package under
+     "Package Dependencies" or a nested package, remove it the same way.
+  5) File → Packages → Reset Package Caches (optional if Xcode keeps complaining).
+  6) Build again. Do NOT recreate the DrawnIntents folder on disk; use Shared/Intents.
+
+-- If you still see "No such module 'PackageDescription'" on DrawnIntents/Package.swift:
+   That only happens when Package.swift is part of the iOS app build (wrong). Do all of the following:
+   A) Project navigator: right-click the DrawnIntents folder or Package.swift under your app
+      (often under "Drawn" group) → Delete → Remove Reference, or Move to Trash if the file
+      should not exist. Do not leave Package.swift in the app target.
+   B) File inspector: if Package.swift is still there, uncheck every target (Drawn, widget).
+   C) Project (blue) → Package Dependencies: remove a local "DrawnIntents" package (minus).
+   D) On disk: if ~/Documents/Cursor/Timer/DrawnIntents/ still exists, delete the whole folder;
+      intents live only under Shared/Intents/ in this project layout.
+   E) Product → Clean Build Folder, then build again.
+
+1) Add these files to BOTH targets (same files on disk, not duplicated):
+   Shared/Intents/DrawnIntentsRuntime.swift
+   Shared/Intents/PendingIntentBridge.swift
+   Shared/Intents/ToggleDrawnTimerIntent.swift
+   Shared/Intents/StopDrawnTimerIntent.swift
+
+   For each file: File inspector (right) → Target Membership:
+   - Your app (e.g. Drawn)
+   - DrawnWidgetExtension
+
+2) Do NOT add Package.swift to any app target. If you see this error:
+   "No such module 'PackageDescription'" on a Package.swift file,
+   that file is in the wrong place: select Package.swift → File inspector →
+   UNcheck all app/widget targets, or remove Package.swift from the project
+   (Package.swift is only for separate SwiftPM projects, not inside the iOS app).
+
+3) Remove stale local "DrawnIntents" package from Xcode (repo has no DrawnIntents/ folder now):
+   Project (blue icon) → Package Dependencies → select DrawnIntents (local) → minus button.
+   Also remove DrawnIntents from each target: Build Phases → Link Binary With Libraries.
+
+4) No `import DrawnIntents` — intents compile into Drawn and DrawnWidgetExtension from Shared/Intents.
+
+5) **Live Activity stop / toggle (island + lock screen)**  
+   — **`TimerLiveActivityWidget`** uses **`Link`** to **`drawn://stop?id=`** / **`drawn://toggle?id=`**, not
+     `Button(intent:)`. `LiveActivityIntent.perform` frequently never runs your app code from the widget binary;
+     deep links are handled in **`RootView.onOpenURL`** in the main app and are the reliable path.
+   — **Required:** register the **`drawn`** URL scheme for the **Drawn** target (Info → URL Types /
+     `CFBundleURLTypes`), or `onOpenURL` will not fire.
+   — Optional: **`StopDrawnTimerIntent`** / App Group / polling still help other entry points; **`DrawnPendingIntentAppGroup`**
+     on app + widget Info.plists if you keep intent-based flows elsewhere.
+   — Recommended: create an App Group in Xcode,
+     enable it on both **Drawn** and **DrawnWidgetExtension**, and add to **both** Info.plists:
+
+     Key: `DrawnPendingIntentAppGroup` (String)  
+     Value: your group id, e.g. `group.com.yourteam.drawn`
+
+     See ``Shared/Intents/PendingIntentBridge.swift``. It writes pending stop UUIDs to that suite so the widget
+     extension and app share state.
