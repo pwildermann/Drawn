@@ -1,14 +1,17 @@
+import OSLog
 import SwiftUI
 import UIKit
 
 struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
 
-    @StateObject private var timerStore = TimerStore()
+    @State private var timerStore = TimerStore()
+    @State private var lastHandledDrawnActionSignature: String?
+    @State private var lastHandledDrawnActionAt: Date = .distantPast
 
     var body: some View {
         HomeView()
-            .environmentObject(timerStore)
+            .environment(timerStore)
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active {
                     timerStore.drainPendingExtensionIntents()
@@ -31,18 +34,50 @@ struct RootView: View {
     /// `drawn://stop|toggle?id=` from Live Activity `Link`s, Shortcuts, etc. Host/scheme casing can vary by source.
     private func handleDrawnURL(_ url: URL) {
         guard url.scheme?.caseInsensitiveCompare("drawn") == .orderedSame else { return }
-        let host = (url.host ?? "").lowercased()
+        let route: String = {
+            let host = (url.host ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !host.isEmpty { return host }
+
+            let trimmedPath = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            if !trimmedPath.isEmpty { return trimmedPath }
+
+            // Handles opaque forms like `drawn:toggle?id=...` where host/path can be empty.
+            let raw = url.absoluteString
+            let afterScheme = raw.replacingOccurrences(of: #"^drawn:"#, with: "", options: .regularExpression)
+            let opaque = afterScheme
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let token = opaque.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: true).first
+            return token.map { String($0).lowercased() } ?? ""
+        }()
         let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let id = components?
             .queryItems?
             .first { $0.name.lowercased() == "id" }?
             .value
             .flatMap { UUID(uuidString: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        DrawnLog.liveActivity.debug("URL route=\(route, privacy: .public) raw=\(url.absoluteString, privacy: .public) parsedID=\(String(describing: id), privacy: .public)")
         guard let id else { return }
-        switch host {
+        let signature = "\(route)|\(id.uuidString)"
+        let now = Date()
+        if signature == lastHandledDrawnActionSignature,
+           now.timeIntervalSince(lastHandledDrawnActionAt) < 0.6 {
+            DrawnLog.liveActivity.debug("URL deduped signature=\(signature, privacy: .public)")
+            return
+        }
+        lastHandledDrawnActionSignature = signature
+        lastHandledDrawnActionAt = now
+        switch route {
         case "stop":
+            // Discard stale queued actions so foreground drain cannot replay contradictory events.
+            _ = PendingIntentBridge.consumePendingStop()
+            _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
             timerStore.resetTimer(id)
         case "toggle":
+            // Deep-link toggle is authoritative. Clear queued toggles first to avoid double-toggle no-op.
+            _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
             timerStore.toggleTimer(id)
         default:
             break

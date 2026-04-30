@@ -4,6 +4,7 @@ import WidgetKit
 @main
 struct DrawnWidgetBundle: WidgetBundle {
     var body: some Widget {
+        DrawnPlaceholderWidget()
         TimerLiveActivityWidget()
     }
 }

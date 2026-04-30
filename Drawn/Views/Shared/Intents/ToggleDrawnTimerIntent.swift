@@ -25,13 +25,13 @@ public struct ToggleDrawnTimerIntent: AppIntent, LiveActivityIntent {
         guard let id = StopDrawnTimerIntent.parseUUID(timerID) else {
             return .result()
         }
-        // Main app already applies the toggle synchronously via `DrawnIntentsRuntime`. Recording a pending UUID here
+        // Main app already applies the toggle synchronously via `TimerIntentCallbacks`. Recording a pending UUID here
         // would duplicate the flip when `drainPendingExtensionIntents()` runs — wrong state vs lock-screen.
-        if let toggle = DrawnIntentsRuntime.onToggleTimer {
+        if let toggle = TimerIntentCallbacks.onToggleTimer {
             toggle(id)
         } else {
             PendingIntentBridge.recordPendingToggle(id)
-            DrawnDarwinAlarmDismissBridge.postDismissRequestFromExtensionIntent()
+            DrawnDarwinAlarmDismissBridge.postToggleRequestFromExtensionIntent()
         }
         return .result()
     }
