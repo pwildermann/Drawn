@@ -109,9 +109,15 @@ final class TimerStore {
 
     /// Pushes Live Activity when user-driven state changes ring; snaps deadlines for foreground math.
     private func syncLiveActivityWithModel() {
+        let laTargetID = ringingSession?.id ?? primaryTimerForLiveActivity()?.id
         reconcileLiveActivity()
+        // Only force-clear when app is active; in background, transient no-target snapshots can race
+        // with extension intents and accidentally tear down the activity for a still-running timer.
+        if laTargetID == nil, UIApplication.shared.applicationState == .active {
+            LiveActivityService.shared.forceEndAllActivities()
+        }
         snapRunningDeadlinesToWallClockNow()
-        lastSyncedLiveActivityTargetID = ringingSession?.id ?? primaryTimerForLiveActivity()?.id
+        lastSyncedLiveActivityTargetID = laTargetID
         scheduleBackgroundLiveActivityHealTimerIfNeeded()
         scheduleBackgroundWallClockExpiryTimerIfNeeded()
         refreshScheduledFireNotifications()
@@ -245,13 +251,19 @@ final class TimerStore {
     }
 
     /// Call when the scene becomes active so pending stop/toggle from the widget extension (App Group / cold launch) drain into `TimerStore`.
-    func drainPendingExtensionIntents() {
+    @discardableResult
+    func drainPendingExtensionIntents() -> (didConsumeStop: Bool, didConsumeToggle: Bool) {
+        var didConsumeStop = false
         while let id = PendingIntentBridge.consumePendingStop() {
+            didConsumeStop = true
             resetTimer(id)
         }
+        var didConsumeToggle = false
         for id in PendingIntentBridge.dequeueAllPendingToggleUUIDs() {
+            didConsumeToggle = true
             toggleTimer(id)
         }
+        return (didConsumeStop, didConsumeToggle)
     }
 
     private func ensureRingingIntentDrainStarted() {
@@ -272,8 +284,13 @@ final class TimerStore {
 
     /// Live Activity intents often run only in the widget extension (`TimerIntentCallbacks` nil there). Darwin notify + polling see `PendingIntentBridge`.
     private func handleDarwinStopFromLiveActivityExtension() {
-        drainPendingExtensionIntents()
+        let drained = drainPendingExtensionIntents()
         if let id = ringingSession?.id {
+            resetTimer(id)
+            return
+        }
+        // App Group might be missing/unavailable, so no UUID crosses process boundaries; stop whichever timer the Live Activity currently represents.
+        if !drained.didConsumeStop, let id = primaryTimerForLiveActivity()?.id {
             resetTimer(id)
             return
         }
@@ -283,12 +300,12 @@ final class TimerStore {
     /// App Group may be missing, so no UUID crosses process boundary. Fall back to toggling whichever
     /// timer the Live Activity currently represents (ringing has stop semantics; otherwise primary timer).
     private func handleDarwinToggleFromLiveActivityExtension() {
-        drainPendingExtensionIntents()
+        let drained = drainPendingExtensionIntents()
         if let id = ringingSession?.id {
             resetTimer(id)
             return
         }
-        if let id = primaryTimerForLiveActivity()?.id {
+        if !drained.didConsumeToggle, let id = primaryTimerForLiveActivity()?.id {
             toggleTimer(id)
         }
     }
@@ -338,9 +355,13 @@ final class TimerStore {
     func resetTimer(_ timerID: UUID) {
         // Always silence alarm audio first (single global alarm); also covers intent ID mismatch vs `timers`.
         TimerAlarmService.shared.stop(for: nil)
+        // Was this timer currently represented in Live Activity before mutating model state?
+        let wasLiveActivityTarget = (ringingSession?.id ?? primaryTimerForLiveActivity()?.id) == timerID
         if ringingSession?.id == timerID {
             ringingSession = nil
             stopRingingIntentDrain()
+            // Ring dismissal from Live Activity must clear stale `0:00` immediately.
+            LiveActivityService.shared.forceEndAllActivities()
         }
         guard let index = timers.firstIndex(where: { $0.id == timerID }) else {
             syncLiveActivityWithModel()
@@ -349,21 +370,34 @@ final class TimerStore {
         timers[index].isRunning = false
         timers[index].hasStarted = false
         timers[index].remainingSeconds = timers[index].duration.totalSeconds
+        // User-driven stop from island/widget can race with stale ActivityKit state. If this timer was the
+        // currently represented target, force-clear first; `syncLiveActivityWithModel()` will recreate a
+        // replacement activity if another timer should still be shown.
+        if wasLiveActivityTarget {
+            LiveActivityService.shared.forceEndAllActivities()
+        }
         syncLiveActivityWithModel()
     }
 
     func toggleTimer(_ timerID: UUID) {
+        let requestedRunningState = !isTimerRunningOrFallback(timerID)
+        setTimerRunning(timerID, running: requestedRunningState)
+    }
+
+    /// Idempotent running-state setter used by external controls (`pause` / `resume`) so duplicate
+    /// URL deliveries cannot accidentally flip a timer back.
+    func setTimerRunning(_ timerID: UUID, running: Bool) {
         let targetID: UUID
         if timers.contains(where: { $0.id == timerID }) {
             targetID = timerID
-            DrawnLog.liveActivity.debug("toggleTimer direct id=\(timerID.uuidString, privacy: .public)")
+            DrawnLog.liveActivity.debug("setTimerRunning direct id=\(timerID.uuidString, privacy: .public) running=\(running, privacy: .public)")
         } else if let fallbackID = primaryTimerForLiveActivity()?.id {
             // Live Activity can briefly carry a stale timer id across app relaunches.
             // Fall back to the currently represented primary timer instead of no-op.
             targetID = fallbackID
-            DrawnLog.liveActivity.debug("toggleTimer fallback requested=\(timerID.uuidString, privacy: .public) using=\(fallbackID.uuidString, privacy: .public)")
+            DrawnLog.liveActivity.debug("setTimerRunning fallback requested=\(timerID.uuidString, privacy: .public) using=\(fallbackID.uuidString, privacy: .public) running=\(running, privacy: .public)")
         } else {
-            DrawnLog.liveActivity.debug("toggleTimer no-op requested=\(timerID.uuidString, privacy: .public) reason=noTarget")
+            DrawnLog.liveActivity.debug("setTimerRunning no-op requested=\(timerID.uuidString, privacy: .public) reason=noTarget running=\(running, privacy: .public)")
             return
         }
         guard let index = timers.firstIndex(where: { $0.id == targetID }) else { return }
@@ -373,16 +407,31 @@ final class TimerStore {
             return
         }
         let wasRunning = timers[index].isRunning
-        timers[index].isRunning.toggle()
-        if timers[index].isRunning {
+        guard wasRunning != running else {
+            DrawnLog.liveActivity.debug("setTimerRunning no-op id=\(targetID.uuidString, privacy: .public) reason=alreadyInRequestedState running=\(running, privacy: .public)")
+            return
+        }
+        timers[index].isRunning = running
+        if running {
             timers[index].hasStarted = true
         }
-        if timers[index].isRunning, !wasRunning,
+        if running, !wasRunning,
            !DrawnNotificationPermissionEducation.hasFinishedPrimerFlow
         {
             presentNotificationPermissionPrimer = true
         }
         syncLiveActivityWithModel()
+    }
+
+    private func isTimerRunningOrFallback(_ timerID: UUID) -> Bool {
+        if let timer = timers.first(where: { $0.id == timerID }) {
+            return timer.isRunning
+        }
+        if let fallbackID = primaryTimerForLiveActivity()?.id,
+           let fallback = timers.first(where: { $0.id == fallbackID }) {
+            return fallback.isRunning
+        }
+        return false
     }
 
     func dismissNotificationPermissionPrimer() {
@@ -413,8 +462,7 @@ final class TimerStore {
     }
 
     func reconcileLiveActivity() {
-        LiveActivityService.shared.reconcile { [weak self] in
-            guard let self else { return (nil, nil) }
+        LiveActivityService.shared.reconcile { [self] in
             if let r = self.ringingSession {
                 return (r, nil)
             }

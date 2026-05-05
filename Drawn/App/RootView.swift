@@ -1,3 +1,4 @@
+import DrawnTimerEngine
 import OSLog
 import SwiftUI
 import UIKit
@@ -69,18 +70,24 @@ struct RootView: View {
         }
         lastHandledDrawnActionSignature = signature
         lastHandledDrawnActionAt = now
-        switch route {
-        case "stop":
+        guard let controlRoute = LiveActivityControlRoute(token: route) else { return }
+        switch controlRoute {
+        case .stop:
             // Discard stale queued actions so foreground drain cannot replay contradictory events.
             _ = PendingIntentBridge.consumePendingStop()
             _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
             timerStore.resetTimer(id)
-        case "toggle":
+        case .pause:
+            _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
+            timerStore.setTimerRunning(id, running: false)
+        case .resume:
+            _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
+            timerStore.setTimerRunning(id, running: true)
+        case .toggle:
+            // Backward-compat route used by older widget builds.
             // Deep-link toggle is authoritative. Clear queued toggles first to avoid double-toggle no-op.
             _ = PendingIntentBridge.dequeueAllPendingToggleUUIDs()
             timerStore.toggleTimer(id)
-        default:
-            break
         }
     }
 }

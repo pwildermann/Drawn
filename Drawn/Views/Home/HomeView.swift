@@ -110,40 +110,6 @@ struct HomeView: View {
                 }
             }
         }
-        // Create timer sheet overlay
-        .overlay {
-            GeometryReader { proxy in
-                ZStack(alignment: .bottom) {
-                    // Backdrop lives outside the `if` so it fades linearly rather than
-                    // spring-animating opacity (which overshoots and pops to 0).
-                    Color.black
-                        .opacity(showingCreateSheet ? 0.35 : 0)
-                        .ignoresSafeArea()
-                        .allowsHitTesting(showingCreateSheet)
-                        .onTapGesture { dismissSheet() }
-                        .animation(.easeInOut(duration: 0.25), value: showingCreateSheet)
-
-                    if showingCreateSheet {
-                        CreateTimerView(isPresented: $showingCreateSheet)
-                            .environment(timerStore)
-                            // Intrinsic height: fixed `height: …` left dead space. `TimePickerWheelView` uses
-                            // a fixed 144pt frame + UIKit `intrinsicContentSize` so `fixedSize` is safe.
-                            .frame(width: proxy.size.width - 16, alignment: .top)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .background(.white)
-                            .clipShape(
-                                RoundedRectangle(cornerRadius: HomeSheetLayout.clipCornerRadius)
-                            )
-                            .padding(.bottom, 8)
-                            .offset(y: sheetDragOffset)
-                            .gesture(dragGesture)
-                            .transition(.move(edge: .bottom))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .ignoresSafeArea()
-            }
-        }
         // Timer action sheet overlay
         .overlay {
             GeometryReader { _ in
@@ -154,6 +120,7 @@ struct HomeView: View {
                         .allowsHitTesting(selectedTimer != nil)
                         .onTapGesture { dismissActionSheet() }
                         .animation(.easeInOut(duration: 0.25), value: selectedTimer?.id)
+                        .zIndex(0)
 
                     if selectedTimer != nil {
                         timerActionSheet()
@@ -177,11 +144,13 @@ struct HomeView: View {
                                     }
                             )
                             .transition(.move(edge: .bottom))
+                            .zIndex(1)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
             }
+            .allowsHitTesting(selectedTimer != nil)
         }
         // Edit timer sheet overlay
         .overlay {
@@ -193,6 +162,7 @@ struct HomeView: View {
                         .allowsHitTesting(editingTimer != nil)
                         .onTapGesture { dismissEditSheet() }
                         .animation(.easeInOut(duration: 0.25), value: editingTimer?.id)
+                        .zIndex(0)
 
                     if let timer = editingTimer {
                         EditTimerView(isPresented: Binding(
@@ -227,11 +197,13 @@ struct HomeView: View {
                                 }
                         )
                         .transition(.move(edge: .bottom))
+                        .zIndex(1)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
             }
+            .allowsHitTesting(editingTimer != nil)
         }
         // Notification permission primer (once, after first timer start — Figma 169:523)
         .overlay {
@@ -256,6 +228,44 @@ struct HomeView: View {
                 .ignoresSafeArea()
             }
             .allowsHitTesting(timerStore.presentNotificationPermissionPrimer)
+        }
+        // Create timer sheet — last in the overlay chain so it paints above other full-screen
+        // dim layers; explicit zIndex keeps the sheet above its own backdrop during transitions.
+        .overlay {
+            GeometryReader { proxy in
+                ZStack(alignment: .bottom) {
+                    // Backdrop lives outside the `if` so it fades linearly rather than
+                    // spring-animating opacity (which overshoots and pops to 0).
+                    Color.black
+                        .opacity(showingCreateSheet ? 0.35 : 0)
+                        .ignoresSafeArea()
+                        .allowsHitTesting(showingCreateSheet)
+                        .onTapGesture { dismissSheet() }
+                        .animation(.easeInOut(duration: 0.25), value: showingCreateSheet)
+                        .zIndex(0)
+
+                    if showingCreateSheet {
+                        CreateTimerView(isPresented: $showingCreateSheet)
+                            .environment(timerStore)
+                            // Intrinsic height: fixed `height: …` left dead space. `TimePickerWheelView` uses
+                            // a fixed 144pt frame + UIKit `intrinsicContentSize` so `fixedSize` is safe.
+                            .frame(width: proxy.size.width - 16, alignment: .top)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .background(.white)
+                            .clipShape(
+                                RoundedRectangle(cornerRadius: HomeSheetLayout.clipCornerRadius)
+                            )
+                            .padding(.bottom, 8)
+                            .offset(y: sheetDragOffset)
+                            .gesture(dragGesture)
+                            .transition(.move(edge: .bottom))
+                            .zIndex(1)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .ignoresSafeArea()
+            }
+            .allowsHitTesting(showingCreateSheet)
         }
         .onChange(of: timerStore.presentNotificationPermissionPrimer) { _, presenting in
             if presenting {
