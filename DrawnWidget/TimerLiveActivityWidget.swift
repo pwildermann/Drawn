@@ -31,6 +31,10 @@ private func canShowPlayPauseToggle(_ state: TimerActivityAttributes.ContentStat
     return state.endDate.timeIntervalSinceNow > -120
 }
 
+private func playPauseDeepLinkHost(for state: TimerActivityAttributes.ContentState) -> String {
+    state.isPaused ? "resume" : "pause"
+}
+
 /// True when **`now`** has reached **`endDate`** for a running, non‑paused countdown while **`isRinging`** may still be false (activity update not delivered).
 private func liveActivityRunningCountdownHasElapsed(_ state: TimerActivityAttributes.ContentState, now: Date) -> Bool {
     guard !state.isRinging, !state.isPaused else { return false }
@@ -199,7 +203,7 @@ private func playPauseToggleOrStaticExpanded(timerID: String, state: TimerActivi
     /// Pin **175×48** — keeps the capsule layout stable while still being tappable.
     return Group {
         if canShowPlayPauseToggle(state) {
-            Link(destination: drawnTimerDeepLink(host: "toggle", timerID: timerID)) { pill }
+            Link(destination: drawnTimerDeepLink(host: playPauseDeepLinkHost(for: state), timerID: timerID)) { pill }
                 .buttonStyle(LiveActivityPressScaleStyle())
         } else {
             pill
@@ -212,7 +216,7 @@ private func playPauseToggleOrStaticExpanded(timerID: String, state: TimerActivi
 private func playPauseToggleOrStaticLockScreen(timerID: String, state: TimerActivityAttributes.ContentState) -> some View {
     let pill = LockScreenTimerPill(state: state)
     if canShowPlayPauseToggle(state) {
-        Link(destination: drawnTimerDeepLink(host: "toggle", timerID: timerID)) { pill }
+        Link(destination: drawnTimerDeepLink(host: playPauseDeepLinkHost(for: state), timerID: timerID)) { pill }
             .buttonStyle(LiveActivityPressScaleStyle())
             .frame(maxWidth: .infinity)
     } else {

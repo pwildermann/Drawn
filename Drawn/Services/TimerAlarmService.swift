@@ -26,6 +26,8 @@ final class TimerAlarmService {
 
     /// Replays `AudioServicesPlayAlertSound` when not using `AVAudioPlayer` (no built-in loop).
     private var systemSoundLoopTimer: Foundation.Timer?
+    /// Repeats vibration while ringing so muted devices still get ongoing haptics in-app.
+    private var vibrationLoopTimer: Foundation.Timer?
 
     func start(for timerID: UUID) {
         stop(for: nil)
@@ -33,9 +35,7 @@ final class TimerAlarmService {
         prepareBundledAlarmPlaybackIfNeeded()
         configureSession()
         startAlarmPlayback()
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.prepare()
-        generator.impactOccurred()
+        startVibrationLoop()
     }
 
     /// Pass `nil` to stop regardless of which timer is ringing (e.g. app tear-down).
@@ -43,6 +43,8 @@ final class TimerAlarmService {
         if let id = timerID, ringingTimerID != id { return }
         systemSoundLoopTimer?.invalidate()
         systemSoundLoopTimer = nil
+        vibrationLoopTimer?.invalidate()
+        vibrationLoopTimer = nil
         bundledAlarmPlayer?.pause()
         bundledAlarmPlayer?.stop()
         bundledAlarmPlayer = nil
@@ -128,6 +130,18 @@ final class TimerAlarmService {
             }
         }
         if let t = systemSoundLoopTimer {
+            RunLoop.main.add(t, forMode: .common)
+        }
+    }
+
+    private func startVibrationLoop() {
+        vibrationLoopTimer?.invalidate()
+        vibrationLoopTimer = nil
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        vibrationLoopTimer = Foundation.Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        }
+        if let t = vibrationLoopTimer {
             RunLoop.main.add(t, forMode: .common)
         }
     }

@@ -57,4 +57,18 @@ final class DrawnTimerEngineTests: XCTestCase {
         let past = now.addingTimeInterval(-5)
         XCTAssertEqual(RunningTimerDeadlineMath.remainingSecondsUntil(deadline: past, now: now), 0)
     }
+
+    func testRemainingAfterElapsedSubtractsWallClockTime() throws {
+        XCTAssertEqual(
+            RunningTimerDeadlineMath.remainingAfterElapsed(savedRemainingSeconds: 3600, elapsedSeconds: 2400),
+            1200
+        )
+    }
+
+    func testRemainingAfterElapsedClampsToZero() throws {
+        XCTAssertEqual(
+            RunningTimerDeadlineMath.remainingAfterElapsed(savedRemainingSeconds: 30, elapsedSeconds: 90),
+            0
+        )
+    }
 }

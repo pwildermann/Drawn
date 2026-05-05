@@ -11,6 +11,7 @@ import UIKit
 final class LiveActivityService {
     static let shared = LiveActivityService()
     private init() {}
+    private var reconcileBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
     /// Bump when thumbnail rasterization logic changes so we don’t keep serving stale JPEGs per doodle hash.
     private let doodleRasterVersion = 6
@@ -35,10 +36,12 @@ final class LiveActivityService {
     func reconcile(fetch: @escaping @MainActor () -> (ringing: DrawnTimer?, primary: DrawnTimer?)) {
         let previous = reconcileChainTask
         reconcileChainTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let backgroundTaskID = self.beginReconcileBackgroundTaskIfNeeded()
+            defer { self.endReconcileBackgroundTask(backgroundTaskID) }
             if let previous {
                 await previous.value
             }
-            guard let self else { return }
             let (ringingSnap, primarySnap) = fetch()
             if ringingSnap == nil {
                 self.ringingIslandAlertEmittedForTimerID = nil
@@ -54,8 +57,28 @@ final class LiveActivityService {
                 }
                 await self.updateOrRequestPrimary(p)
             } else {
-                await self.endAllActivitiesAsync()
+                // Background can transiently deliver no model snapshot during lifecycle churn.
+                // Avoid destructive end-all outside foreground; reconcile will correct on next active pass.
+                if UIApplication.shared.applicationState == .active {
+                    await self.endAllActivitiesAsync()
+                }
             }
+        }
+    }
+
+    /// Explicit cleanup path for user-driven ring dismissal/reset so stale `0:00` activities
+    /// cannot survive until a later reconcile pass.
+    func forceEndAllActivities() {
+        let previous = reconcileChainTask
+        reconcileChainTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let backgroundTaskID = self.beginReconcileBackgroundTaskIfNeeded()
+            defer { self.endReconcileBackgroundTask(backgroundTaskID) }
+            if let previous {
+                await previous.value
+            }
+            self.ringingIslandAlertEmittedForTimerID = nil
+            await self.endAllActivitiesAsync()
         }
     }
 
@@ -161,6 +184,33 @@ final class LiveActivityService {
         for a in Activity<TimerActivityAttributes>.activities {
             await a.end(nil, dismissalPolicy: .immediate)
         }
+    }
+
+    /// Deep-link controls can momentarily foreground the app, then suspend quickly. Keep reconcile alive
+    /// long enough to push ActivityKit updates (especially pause) before suspension.
+    private func beginReconcileBackgroundTaskIfNeeded() -> UIBackgroundTaskIdentifier {
+        if UIApplication.shared.applicationState == .active {
+            return .invalid
+        }
+        let taskID = UIApplication.shared.beginBackgroundTask(withName: "LiveActivityReconcile") { [weak self] in
+            guard let self else { return }
+            if self.reconcileBackgroundTask != .invalid {
+                UIApplication.shared.endBackgroundTask(self.reconcileBackgroundTask)
+                self.reconcileBackgroundTask = .invalid
+            }
+        }
+        reconcileBackgroundTask = taskID
+        return taskID
+    }
+
+    private func endReconcileBackgroundTask(_ taskID: UIBackgroundTaskIdentifier) {
+        guard taskID != .invalid else { return }
+        guard taskID == reconcileBackgroundTask else {
+            UIApplication.shared.endBackgroundTask(taskID)
+            return
+        }
+        UIApplication.shared.endBackgroundTask(taskID)
+        reconcileBackgroundTask = .invalid
     }
 
     private func contentState(from timer: DrawnTimer) -> TimerActivityAttributes.ContentState {
