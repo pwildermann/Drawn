@@ -7,4 +7,5 @@ Drawn Timer is an iOS timer app with custom doodle timers and Live Activities.
 For support, feedback, or bug reports, please use:
 
 - [GitHub repository](https://github.com/pwildermann/Timer)
+- [Privacy Policy](./PRIVACY_POLICY.md)
 
