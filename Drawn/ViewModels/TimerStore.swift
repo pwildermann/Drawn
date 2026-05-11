@@ -48,6 +48,14 @@ final class TimerStore {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
+    /// Forces an immediate save and cancels any pending debounce.
+    /// Use after explicit user actions and lifecycle boundaries.
+    private func flushSaveNow() {
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        TimerPersistenceService.shared.save(timers)
+    }
+
     init() {
         timers = TimerPersistenceService.shared.load()
 
@@ -83,6 +91,7 @@ final class TimerStore {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.flushSaveNow()
                 self.snapRunningDeadlinesToWallClockNow()
                 // One push refreshes **`endDate`/`contentPushEpoch`** for the widget (not per‑second).
                 self.syncLiveActivityWithModel()
@@ -317,6 +326,7 @@ final class TimerStore {
 
     func addTimer(name: String, duration: TimerDuration, doodleData: Data?) {
         timers.append(DrawnTimer(name: name, duration: duration, doodleData: doodleData))
+        flushSaveNow()
     }
 
     func updateTimer(id: UUID, duration: TimerDuration, doodleData: Data?) {
@@ -339,6 +349,7 @@ final class TimerStore {
             ringingSession = s
         }
         syncLiveActivityWithModel()
+        flushSaveNow()
     }
 
     func deleteTimer(_ timerID: UUID) {
@@ -350,6 +361,7 @@ final class TimerStore {
         TimerFireNotificationService.shared.removeAll(for: timerID)
         timers.removeAll { $0.id == timerID }
         syncLiveActivityWithModel()
+        flushSaveNow()
     }
 
     func resetTimer(_ timerID: UUID) {
@@ -377,6 +389,7 @@ final class TimerStore {
             LiveActivityService.shared.forceEndAllActivities()
         }
         syncLiveActivityWithModel()
+        flushSaveNow()
     }
 
     func toggleTimer(_ timerID: UUID) {
@@ -421,6 +434,7 @@ final class TimerStore {
             presentNotificationPermissionPrimer = true
         }
         syncLiveActivityWithModel()
+        flushSaveNow()
     }
 
     private func isTimerRunningOrFallback(_ timerID: UUID) -> Bool {
