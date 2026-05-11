@@ -203,6 +203,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
             }
+            .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(editingTimer != nil)
         }
         // Notification permission primer (once, after first timer start — Figma 169:523)
@@ -256,9 +257,7 @@ struct HomeView: View {
                                 RoundedRectangle(cornerRadius: HomeSheetLayout.clipCornerRadius)
                             )
                             .padding(.bottom, 8)
-                            // `GeometryReader` is in safe-area coordinates; without this shift the sheet
-                            // sits `safeAreaInsets.bottom` higher than the physical screen edge.
-                            .offset(y: sheetDragOffset + proxy.safeAreaInsets.bottom)
+                            .offset(y: sheetDragOffset)
                             .gesture(dragGesture)
                             .transition(.move(edge: .bottom))
                             .zIndex(1)
@@ -267,6 +266,7 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                 .ignoresSafeArea()
             }
+            .ignoresSafeArea(edges: .bottom)
             .allowsHitTesting(showingCreateSheet)
         }
         .onChange(of: timerStore.presentNotificationPermissionPrimer) { _, presenting in

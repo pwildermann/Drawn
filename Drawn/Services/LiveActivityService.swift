@@ -116,7 +116,7 @@ final class LiveActivityService {
         // No Live Activity yet (alarm with no LA, or Activities were cleared): standard request, then alert update.
         let attributes = TimerActivityAttributes(timerID: timer.id.uuidString, doodleImageData: imageData)
         do {
-            if #available(iOS 17.0, *) {
+            if #available(iOS 18.0, *) {
                 _ = try Activity<TimerActivityAttributes>.request(
                     attributes: attributes,
                     content: ringingContent,
@@ -152,7 +152,7 @@ final class LiveActivityService {
             guard UIApplication.shared.applicationState == .active else { return }
             let attributes = TimerActivityAttributes(timerID: timer.id.uuidString, doodleImageData: imageData)
             do {
-                if #available(iOS 17.0, *) {
+                if #available(iOS 18.0, *) {
                     _ = try Activity<TimerActivityAttributes>.request(
                         attributes: attributes,
                         content: primaryContent,

@@ -59,6 +59,24 @@ struct PressTrackingButton<Label: View>: UIViewRepresentable {
             self.parent = parent
         }
 
+        deinit {
+            teardownForArchiveCompilerWorkaround()
+        }
+
+        /// Explicitly keep destructor cleanup out of inlining/optimizer transforms.
+        /// This avoids rare Release-only compiler crashes seen around synthesized `deinit`.
+        @inline(never)
+        private func teardownForArchiveCompilerWorkaround() {
+            button?.removeTarget(self, action: #selector(Coordinator.handleTouchDown), for: .touchDown)
+            button?.removeTarget(self, action: #selector(Coordinator.handleTouchUpInside), for: .touchUpInside)
+            button?.removeTarget(
+                self,
+                action: #selector(Coordinator.handleTouchUpOutsideOrCancel),
+                for: [.touchUpOutside, .touchCancel]
+            )
+            hosting = nil
+        }
+
         private func applyUIKitPress(pressed: Bool) {
             guard let button, let content = self.hosting?.view, parent.useUIKitPressAnimation else { return }
             button.transform = .identity
