@@ -256,7 +256,9 @@ struct HomeView: View {
                                 RoundedRectangle(cornerRadius: HomeSheetLayout.clipCornerRadius)
                             )
                             .padding(.bottom, 8)
-                            .offset(y: sheetDragOffset)
+                            // `GeometryReader` is in safe-area coordinates; without this shift the sheet
+                            // sits `safeAreaInsets.bottom` higher than the physical screen edge.
+                            .offset(y: sheetDragOffset + proxy.safeAreaInsets.bottom)
                             .gesture(dragGesture)
                             .transition(.move(edge: .bottom))
                             .zIndex(1)
